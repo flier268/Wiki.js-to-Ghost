@@ -257,6 +257,8 @@ parse_frontmatter() {
     status="draft"
     content=""
     slug=""
+    publish_date=""
+    created_date=""
 
     # 讀取檔案
     if [ ! -f "$file" ]; then
@@ -289,6 +291,10 @@ parse_frontmatter() {
                 tags=$(echo "$line" | cut -d':' -f2- | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
             elif echo "$line" | grep -q "^slug:"; then
                 slug=$(echo "$line" | cut -d':' -f2- | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' | sed 's/^["'\'']//' | sed 's/["'\'']$//')
+            elif echo "$line" | grep -q "^date:"; then
+                publish_date=$(echo "$line" | cut -d':' -f2- | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+            elif echo "$line" | grep -q "^dateCreated:"; then
+                created_date=$(echo "$line" | cut -d':' -f2- | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
             fi
         done <<< "$front_matter"
     else
@@ -312,6 +318,8 @@ generate_json_payload() {
     local description="$4"
     local tags="$5"
     local slug="$6"
+    local publish_date="$7"
+    local created_date="$8"
 
     # 將參數寫入臨時檔案以避免 shell 轉義問題
     local temp_dir="/tmp/ghost_import_$"
@@ -323,6 +331,8 @@ generate_json_payload() {
     echo "$description" > "$temp_dir/description.txt"
     echo "$tags" > "$temp_dir/tags.txt"
     echo "$6" > "$temp_dir/slug.txt"  # slug 參數
+    echo "$7" > "$temp_dir/publish_date.txt"  # 發布日期
+    echo "$8" > "$temp_dir/created_date.txt"  # 創建日期
 
     # 使用 Python 正確處理 JSON
     python3 << EOF
@@ -346,6 +356,8 @@ status = read_file_safe(os.path.join(temp_dir, "status.txt"))
 description = read_file_safe(os.path.join(temp_dir, "description.txt"))
 tags_str = read_file_safe(os.path.join(temp_dir, "tags.txt"))
 slug = read_file_safe(os.path.join(temp_dir, "slug.txt"))
+publish_date = read_file_safe(os.path.join(temp_dir, "publish_date.txt"))
+created_date = read_file_safe(os.path.join(temp_dir, "created_date.txt"))
 
 # 建立 mobiledoc 格式
 mobiledoc = {
@@ -366,6 +378,28 @@ post = {
 # 加入 slug（如果有）
 if slug and slug.strip():
     post["slug"] = slug
+
+# 加入發布日期（如果有）
+if publish_date and publish_date.strip():
+    # 驗證 ISO 8601 日期格式
+    try:
+        from datetime import datetime
+        # 嘗試解析日期格式
+        parsed_date = datetime.fromisoformat(publish_date.replace('Z', '+00:00'))
+        post["published_at"] = publish_date
+    except ValueError:
+        print(f"警告: 發布日期格式不正確: {publish_date}", file=sys.stderr)
+
+# 加入創建日期（如果有）
+if created_date and created_date.strip():
+    # 驗證 ISO 8601 日期格式
+    try:
+        from datetime import datetime
+        # 嘗試解析日期格式
+        parsed_date = datetime.fromisoformat(created_date.replace('Z', '+00:00'))
+        post["created_at"] = created_date
+    except ValueError:
+        print(f"警告: 創建日期格式不正確: {created_date}", file=sys.stderr)
 
 # 加入描述（如果有）
 if description and description.strip():
@@ -424,6 +458,14 @@ import_file() {
         echo -e "${CYAN}  路由 Slug: $slug${NC}"
     fi
 
+    if [ -n "$publish_date" ]; then
+        echo -e "${CYAN}  發布日期: $publish_date${NC}"
+    fi
+
+    if [ -n "$created_date" ]; then
+        echo -e "${CYAN}  創建日期: $created_date${NC}"
+    fi
+
     # 生成 JWT Token
     echo -e "${BLUE}  生成 JWT Token...${NC}"
     jwt_token=$(generate_jwt_token "$GHOST_ADMIN_API_KEY")
@@ -435,7 +477,7 @@ import_file() {
 
     # 生成 JSON payload
     echo -e "${BLUE}  生成 JSON payload...${NC}"
-    json_payload=$(generate_json_payload "$title" "$content" "$status" "$description" "$tags" "$slug")
+    json_payload=$(generate_json_payload "$title" "$content" "$status" "$description" "$tags" "$slug" "$publish_date" "$created_date")
 
     if [ $? -ne 0 ] || [ -z "$json_payload" ]; then
         echo -e "${RED}✗ JSON payload 生成失敗${NC}"
@@ -615,6 +657,12 @@ main() {
             echo -e "${CYAN}  狀態: $status${NC}"
             if [ -n "$slug" ]; then
                 echo -e "${CYAN}  路由 Slug: $slug${NC}"
+            fi
+            if [ -n "$publish_date" ]; then
+                echo -e "${CYAN}  發布日期: $publish_date${NC}"
+            fi
+            if [ -n "$created_date" ]; then
+                echo -e "${CYAN}  創建日期: $created_date${NC}"
             fi
             imported_count=$((imported_count + 1))
         else
